@@ -11,6 +11,7 @@ import numpy as np
 import optax
 
 from . import rssm
+from grounded.trd import TRD
 
 f32 = jnp.float32
 i32 = jnp.int32
@@ -73,6 +74,13 @@ class Agent(embodied.jax.Agent):
 
     self.modules = [
         self.dyn, self.enc, self.dec, self.rew, self.con, self.pol, self.val]
+
+    # Grounded Imagination: TRD
+    self.grounded = hasattr(config, 'grounded') and config.grounded.enabled
+    if self.grounded:
+      self.trd = TRD(name='trd', hidden=config.grounded.trd_hidden)
+      self.modules.append(self.trd)
+
     self.opt = embodied.jax.Optimizer(
         self.modules, self._make_opt(**config.opt), summary_depth=1,
         name='opt')
@@ -80,6 +88,9 @@ class Agent(embodied.jax.Agent):
     scales = self.config.loss_scales.copy()
     rec = scales.pop('rec')
     scales.update({k: rec for k in dec_space})
+    if self.grounded:
+      scales['trd'] = config.grounded.trd_scale
+      scales['balance'] = config.grounded.balance_scale
     self.scales = scales
 
   @property
@@ -181,6 +192,31 @@ class Agent(embodied.jax.Agent):
       target = f32(value) / 255 if isimage(space) else value
       losses[key] = recon.loss(sg(target))
 
+    # Grounded: TRD training loss
+    if self.grounded:
+      z = sg(self.feat2tensor(repfeat))  # (B, T, z_dim)
+      z_t = z[:, :-1]  # (B, T-1, z_dim)
+      z_next_real = z[:, 1:]  # (B, T-1, z_dim)
+      a_t = nn.DictConcat(self.act_space, 1)(prevact)[:, 1:]  # (B, T-1, a_dim)
+      # World model one-step prediction for negative samples
+      starts_trd = jax.tree.map(lambda x: x[:, :-1].reshape(B*(T-1), *x.shape[2:]), repfeat)
+      acts_trd = jax.tree.map(lambda x: x[:, 1:].reshape(B*(T-1), *x.shape[2:]), prevact)
+      _, pred_feat, _ = self.dyn.imagine(starts_trd, acts_trd, 1, training)
+      z_next_pred = sg(self.feat2tensor(
+          jax.tree.map(lambda x: x[:, 0], pred_feat)))  # (B*(T-1), z_dim)
+      # Flatten real transitions
+      BT1 = B * (T - 1)
+      z_t_flat = z_t.reshape(BT1, -1)
+      a_t_flat = a_t.reshape(BT1, -1)
+      z_next_real_flat = z_next_real.reshape(BT1, -1)
+      scores_real = self.trd(z_t_flat, a_t_flat, z_next_real_flat)
+      scores_fake = self.trd(z_t_flat, a_t_flat, z_next_pred)
+      trd_loss = TRD.train_loss(scores_real, scores_fake)
+      # Broadcast scalar to (B, T) shape to match other losses
+      losses['trd'] = jnp.full((B, T), trd_loss)
+      metrics['trd_score_real'] = scores_real.mean()
+      metrics['trd_score_fake'] = scores_fake.mean()
+
     B, T = reset.shape
     shapes = {k: v.shape for k, v in losses.items()}
     assert all(x == (B, T) for x in shapes.values()), ((B, T), shapes)
@@ -200,6 +236,29 @@ class Agent(embodied.jax.Agent):
     assert all(x.shape[:2] == (B * K, H + 1) for x in jax.tree.leaves(imgfeat))
     assert all(x.shape[:2] == (B * K, H + 1) for x in jax.tree.leaves(imgact))
     inp = self.feat2tensor(imgfeat)
+
+    # Grounded: compute cumulative trust weights for imagination
+    imag_trust = None
+    if self.grounded:
+      # TRD scores on imagined transitions: (B*K, H+1) feat → (B*K, H) pairs
+      z_img = sg(inp)  # (B*K, H+1, z_dim)
+      z_img_t = z_img[:, :-1]  # (B*K, H, z_dim)
+      z_img_next = z_img[:, 1:]  # (B*K, H, z_dim)
+      a_img = nn.DictConcat(self.act_space, 1)(imgact)[:, :-1]  # (B*K, H, a_dim)
+      BK, Hsteps = z_img_t.shape[:2]
+      trust_per_step = self.trd(
+          z_img_t.reshape(BK * Hsteps, -1),
+          a_img.reshape(BK * Hsteps, -1),
+          z_img_next.reshape(BK * Hsteps, -1),
+      ).reshape(BK, Hsteps)  # (B*K, H)
+      imag_trust = jnp.cumprod(trust_per_step, axis=1)  # (B*K, H)
+      # imag_loss weight shape is (B*K, H+1), trust is (B*K, H)
+      # Pad with 1.0 at the start (first step has full trust)
+      imag_trust = jnp.concatenate([
+          jnp.ones((BK, 1), dtype=imag_trust.dtype), imag_trust], axis=1)
+      metrics['imag_trust_mean'] = imag_trust.mean()
+      metrics['imag_effective_steps'] = (imag_trust > self.config.grounded.tau).sum(1).mean()
+
     los, imgloss_out, mets = imag_loss(
         imgact,
         self.rew(inp, 2).pred(),
@@ -211,6 +270,7 @@ class Agent(embodied.jax.Agent):
         update=training,
         contdisc=self.config.contdisc,
         horizon=self.config.horizon,
+        trust_weights=imag_trust,
         **self.config.imag_loss)
     losses.update({k: v.mean(1).reshape((B, K)) for k, v in los.items()})
     metrics.update(mets)
@@ -386,6 +446,7 @@ def imag_loss(
     update,
     contdisc=True,
     slowtar=True,
+    trust_weights=None,
     horizon=333,
     lam=0.95,
     actent=3e-4,
@@ -400,6 +461,8 @@ def imag_loss(
   tarval = slowval if slowtar else val
   disc = 1 if contdisc else 1 - 1 / horizon
   weight = jnp.cumprod(disc * con, 1) / disc
+  if trust_weights is not None:
+    weight = weight * trust_weights
   last = jnp.zeros_like(con)
   term = 1 - con
   ret = lambda_return(last, term, rew, tarval, tarval, disc, lam)

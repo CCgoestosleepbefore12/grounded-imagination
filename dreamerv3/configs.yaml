@@ -116,6 +116,12 @@ defaults:
     repval_grad: True
     report: True
     report_gradnorms: False
+    grounded:
+      enabled: False
+      trd_hidden: 256
+      tau: 0.15
+      trd_scale: 1.0
+      balance_scale: 0.01
 
 size1m: &size1m
   .*\.rssm: {deter: 512, hidden: 64, classes: 4}
