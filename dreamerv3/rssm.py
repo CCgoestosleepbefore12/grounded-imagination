@@ -9,6 +9,8 @@ import jax.numpy as jnp
 import ninjax as nj
 import numpy as np
 
+from grounded.moe_dynamics import MoECore
+
 f32 = jnp.float32
 sg = jax.lax.stop_gradient
 
@@ -30,6 +32,9 @@ class RSSM(nj.Module):
   absolute: bool = False
   blocks: int = 8
   free_nats: float = 1.0
+  moe: bool = False
+  num_experts: int = 4
+  balance_coef: float = 0.01
 
   def __init__(self, act_space, **kw):
     assert self.deter % self.blocks == 0
@@ -128,34 +133,52 @@ class RSSM(nj.Module):
       dyn = jnp.maximum(dyn, self.free_nats)
       rep = jnp.maximum(rep, self.free_nats)
     losses = {'dyn': dyn, 'rep': rep}
+    if self.moe and hasattr(self, '_last_router_weights'):
+      losses['balance'] = MoECore.compute_balance_loss(
+          self._last_router_weights, self.balance_coef)
     metrics['dyn_ent'] = self._dist(prior).entropy().mean()
     metrics['rep_ent'] = self._dist(post).entropy().mean()
     return carry, entries, losses, feat, metrics
 
+  def _moe_core(self):
+    return self.sub('moe', MoECore,
+                    deter=self.deter, hidden=self.hidden,
+                    blocks=self.blocks, dynlayers=self.dynlayers,
+                    num_experts=self.num_experts, norm=self.norm,
+                    act=self.act, balance_coef=self.balance_coef,
+                    **self.kw)
+
   def _core(self, deter, stoch, action):
     stoch = stoch.reshape((stoch.shape[0], -1))
     action /= sg(jnp.maximum(1, jnp.abs(action)))
-    g = self.blocks
-    flat2group = lambda x: einops.rearrange(x, '... (g h) -> ... g h', g=g)
-    group2flat = lambda x: einops.rearrange(x, '... g h -> ... (g h)', g=g)
+    # Shared input preprocessing
     x0 = self.sub('dynin0', nn.Linear, self.hidden, **self.kw)(deter)
     x0 = nn.act(self.act)(self.sub('dynin0norm', nn.Norm, self.norm)(x0))
     x1 = self.sub('dynin1', nn.Linear, self.hidden, **self.kw)(stoch)
     x1 = nn.act(self.act)(self.sub('dynin1norm', nn.Norm, self.norm)(x1))
     x2 = self.sub('dynin2', nn.Linear, self.hidden, **self.kw)(action)
     x2 = nn.act(self.act)(self.sub('dynin2norm', nn.Norm, self.norm)(x2))
-    x = jnp.concatenate([x0, x1, x2], -1)[..., None, :].repeat(g, -2)
-    x = group2flat(jnp.concatenate([flat2group(deter), x], -1))
-    for i in range(self.dynlayers):
-      x = self.sub(f'dynhid{i}', nn.BlockLinear, self.deter, g, **self.kw)(x)
-      x = nn.act(self.act)(self.sub(f'dynhid{i}norm', nn.Norm, self.norm)(x))
-    x = self.sub('dyngru', nn.BlockLinear, 3 * self.deter, g, **self.kw)(x)
-    gates = jnp.split(flat2group(x), 3, -1)
-    reset, cand, update = [group2flat(x) for x in gates]
-    reset = jax.nn.sigmoid(reset)
-    cand = jnp.tanh(reset * cand)
-    update = jax.nn.sigmoid(update - 1)
-    deter = update * cand + (1 - update) * deter
+    preproc = jnp.concatenate([x0, x1, x2], -1)  # (B, hidden*3)
+
+    if self.moe:
+      moe_core = self._moe_core()
+      deter, self._last_router_weights = moe_core(deter, preproc)
+    else:
+      g = self.blocks
+      flat2group = lambda x: einops.rearrange(x, '... (g h) -> ... g h', g=g)
+      group2flat = lambda x: einops.rearrange(x, '... g h -> ... (g h)', g=g)
+      x = preproc[..., None, :].repeat(g, -2)
+      x = group2flat(jnp.concatenate([flat2group(deter), x], -1))
+      for i in range(self.dynlayers):
+        x = self.sub(f'dynhid{i}', nn.BlockLinear, self.deter, g, **self.kw)(x)
+        x = nn.act(self.act)(self.sub(f'dynhid{i}norm', nn.Norm, self.norm)(x))
+      x = self.sub('dyngru', nn.BlockLinear, 3 * self.deter, g, **self.kw)(x)
+      gates = jnp.split(flat2group(x), 3, -1)
+      reset, cand, update = [group2flat(x) for x in gates]
+      reset = jax.nn.sigmoid(reset)
+      cand = jnp.tanh(reset * cand)
+      update = jax.nn.sigmoid(update - 1)
+      deter = update * cand + (1 - update) * deter
     return deter
 
   def _prior(self, feat):
