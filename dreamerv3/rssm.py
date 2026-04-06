@@ -133,9 +133,25 @@ class RSSM(nj.Module):
       dyn = jnp.maximum(dyn, self.free_nats)
       rep = jnp.maximum(rep, self.free_nats)
     losses = {'dyn': dyn, 'rep': rep}
-    if self.moe and hasattr(self, '_last_router_weights'):
-      losses['balance'] = MoECore.compute_balance_loss(
-          self._last_router_weights, self.balance_coef)
+    if self.moe:
+      # Compute balance loss by running router independently on observed feats
+      # (cannot use stored tracer from scan, so recompute here)
+      deter_flat = feat['deter'].reshape(-1, self.deter)  # (B*T, deter)
+      stoch_flat = feat['stoch'].reshape(-1, self.stoch * self.classes)  # (B*T, stoch*classes)
+      x0 = self.sub('dynin0', nn.Linear, self.hidden, **self.kw)(deter_flat)
+      x0 = nn.act(self.act)(self.sub('dynin0norm', nn.Norm, self.norm)(x0))
+      x1 = self.sub('dynin1', nn.Linear, self.hidden, **self.kw)(stoch_flat)
+      x1 = nn.act(self.act)(self.sub('dynin1norm', nn.Norm, self.norm)(x1))
+      preproc_flat = jnp.concatenate([x0, x1, jnp.zeros_like(x0)], -1)
+      moe_core = self._moe_core()
+      # Only run router, not full experts
+      x_r = moe_core.sub('router0', nn.Linear, 128, **moe_core.kw)(preproc_flat)
+      x_r = jax.nn.gelu(x_r)
+      router_logits = moe_core.sub(
+          'router1', nn.Linear, self.num_experts, **moe_core.kw)(x_r)
+      router_weights = jax.nn.softmax(router_logits, axis=-1)
+      balance = MoECore.compute_balance_loss(router_weights, self.balance_coef)
+      losses['balance'] = jnp.full_like(dyn, balance)
     metrics['dyn_ent'] = self._dist(prior).entropy().mean()
     metrics['rep_ent'] = self._dist(post).entropy().mean()
     return carry, entries, losses, feat, metrics
@@ -162,7 +178,7 @@ class RSSM(nj.Module):
 
     if self.moe:
       moe_core = self._moe_core()
-      deter, self._last_router_weights = moe_core(deter, preproc)
+      deter, _ = moe_core(deter, preproc)
     else:
       g = self.blocks
       flat2group = lambda x: einops.rearrange(x, '... (g h) -> ... g h', g=g)
