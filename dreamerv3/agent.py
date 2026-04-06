@@ -195,26 +195,19 @@ class Agent(embodied.jax.Agent):
 
     # Grounded: TRD training loss
     if self.grounded:
-      # Real transitions: posterior feat (corrected by observation)
       z = sg(self.feat2tensor(repfeat))  # (B, T, z_dim)
       z_t = z[:, :-1]  # (B, T-1, z_dim)
       z_next_real = z[:, 1:]  # (B, T-1, z_dim)
       a_t = nn.cast(nn.DictConcat(self.act_space, 1)(prevact)[:, 1:])  # (B, T-1, a_dim)
-      # Fake transitions: use prior stoch (model prediction without observation)
-      # prior_logit already computed in dyn.loss() and stored in repfeat
-      prior_logit = repfeat['prior_logit']  # (B, T, stoch, classes)
-      prior_stoch = nn.cast(jax.nn.softmax(prior_logit, axis=-1))  # (B, T, stoch, classes)
-      fake_feat = dict(deter=repfeat['deter'], stoch=prior_stoch)
-      z_fake = sg(self.feat2tensor(fake_feat))  # (B, T, z_dim)
-      z_next_pred = z_fake[:, 1:]  # (B, T-1, z_dim)
-      # Flatten and score
+      # Negative samples: shuffle z_next across batch (contrastive approach)
+      # Mismatched (z_t, a_t, z_next_shuffled) are "fake" transitions
       BT1 = B * (T - 1)
       z_t_flat = z_t.reshape(BT1, -1)
       a_t_flat = a_t.reshape(BT1, -1)
       z_next_real_flat = z_next_real.reshape(BT1, -1)
-      z_next_pred_flat = z_next_pred.reshape(BT1, -1)
+      z_next_fake_flat = jnp.roll(z_next_real_flat, shift=1, axis=0)
       scores_real = self.trd(z_t_flat, a_t_flat, z_next_real_flat)
-      scores_fake = self.trd(z_t_flat, a_t_flat, z_next_pred_flat)
+      scores_fake = self.trd(z_t_flat, a_t_flat, z_next_fake_flat)
       trd_loss = TRD.train_loss(scores_real, scores_fake)
       losses['trd'] = jnp.full((B, T), trd_loss)
       metrics['trd_score_real'] = scores_real.mean()
