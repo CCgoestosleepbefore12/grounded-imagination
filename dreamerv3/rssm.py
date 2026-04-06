@@ -136,9 +136,9 @@ class RSSM(nj.Module):
     if self.moe:
       # Recompute router weights via full MoE forward pass on observed feats
       # (cannot store tracers from scan, so rerun here)
-      deter_flat = sg(feat['deter']).reshape(-1, self.deter)
-      stoch_flat = sg(feat['stoch']).reshape(deter_flat.shape[0], -1)
-      action_zeros = jnp.zeros((deter_flat.shape[0], self.hidden))
+      deter_flat = nn.cast(sg(feat['deter']).reshape(-1, self.deter))
+      stoch_flat = nn.cast(sg(feat['stoch']).reshape(deter_flat.shape[0], -1))
+      action_zeros = nn.cast(jnp.zeros((deter_flat.shape[0], self.hidden)))
       x0 = self.sub('dynin0', nn.Linear, self.hidden, **self.kw)(deter_flat)
       x0 = nn.act(self.act)(self.sub('dynin0norm', nn.Norm, self.norm)(x0))
       x1 = self.sub('dynin1', nn.Linear, self.hidden, **self.kw)(stoch_flat)
