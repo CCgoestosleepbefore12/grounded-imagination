@@ -156,7 +156,8 @@ class RSSM(nj.Module):
       losses['balance'] = jnp.full_like(dyn, balance)
     metrics['dyn_ent'] = self._dist(prior).entropy().mean()
     metrics['rep_ent'] = self._dist(post).entropy().mean()
-    return carry, entries, losses, feat, metrics
+    extras = {'prior_logit': prior}
+    return carry, entries, losses, feat, metrics, extras
 
   def _moe_core(self):
     return self.sub('moe', MoECore,
