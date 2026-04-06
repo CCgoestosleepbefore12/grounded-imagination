@@ -90,7 +90,8 @@ class Agent(embodied.jax.Agent):
     scales.update({k: rec for k in dec_space})
     if self.grounded:
       scales['trd'] = config.grounded.trd_scale
-      scales['balance'] = config.grounded.balance_scale
+    if config.dyn.rssm.moe:
+      scales['balance'] = config.grounded.balance_scale if self.grounded else 0.01
     self.scales = scales
 
   @property
@@ -197,7 +198,7 @@ class Agent(embodied.jax.Agent):
       z = sg(self.feat2tensor(repfeat))  # (B, T, z_dim)
       z_t = z[:, :-1]  # (B, T-1, z_dim)
       z_next_real = z[:, 1:]  # (B, T-1, z_dim)
-      a_t = nn.DictConcat(self.act_space, 1)(prevact)[:, 1:]  # (B, T-1, a_dim)
+      a_t = nn.cast(nn.DictConcat(self.act_space, 1)(prevact)[:, 1:])  # (B, T-1, a_dim)
       # World model one-step prediction for negative samples
       starts_trd = jax.tree.map(lambda x: x[:, :-1].reshape(B*(T-1), *x.shape[2:]), repfeat)
       acts_trd = jax.tree.map(lambda x: x[:, 1:].reshape(B*(T-1), *x.shape[2:]), prevact)
@@ -244,7 +245,7 @@ class Agent(embodied.jax.Agent):
       z_img = sg(inp)  # (B*K, H+1, z_dim)
       z_img_t = z_img[:, :-1]  # (B*K, H, z_dim)
       z_img_next = z_img[:, 1:]  # (B*K, H, z_dim)
-      a_img = nn.DictConcat(self.act_space, 1)(imgact)[:, :-1]  # (B*K, H, a_dim)
+      a_img = nn.cast(nn.DictConcat(self.act_space, 1)(imgact)[:, :-1])  # (B*K, H, a_dim)
       BK, Hsteps = z_img_t.shape[:2]
       trust_per_step = self.trd(
           z_img_t.reshape(BK * Hsteps, -1),

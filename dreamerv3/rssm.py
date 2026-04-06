@@ -136,14 +136,20 @@ class RSSM(nj.Module):
     if self.moe:
       # Recompute router weights via full MoE forward pass on observed feats
       # (cannot store tracers from scan, so rerun here)
-      deter_flat = nn.cast(sg(feat['deter']).reshape(-1, self.deter))
-      stoch_flat = nn.cast(sg(feat['stoch']).reshape(deter_flat.shape[0], -1))
-      action_zeros = nn.cast(jnp.zeros((deter_flat.shape[0], self.hidden)))
+      # Flatten observed feats and reconstruct preproc with actual action embeddings
+      B_flat = feat['deter'].shape[0] * feat['deter'].shape[1]
+      deter_flat = nn.cast(sg(feat['deter']).reshape(B_flat, self.deter))
+      stoch_flat = nn.cast(sg(feat['stoch']).reshape(B_flat, -1))
+      # Use actual action embeddings (not zeros) for accurate router weights
+      acts_flat = nn.cast(nn.DictConcat(self.act_space, 1)(acts).reshape(B_flat, -1))
+      acts_flat = acts_flat / sg(jnp.maximum(1, jnp.abs(acts_flat)))
       x0 = self.sub('dynin0', nn.Linear, self.hidden, **self.kw)(deter_flat)
       x0 = nn.act(self.act)(self.sub('dynin0norm', nn.Norm, self.norm)(x0))
       x1 = self.sub('dynin1', nn.Linear, self.hidden, **self.kw)(stoch_flat)
       x1 = nn.act(self.act)(self.sub('dynin1norm', nn.Norm, self.norm)(x1))
-      preproc_flat = jnp.concatenate([x0, x1, action_zeros], -1)
+      x2 = self.sub('dynin2', nn.Linear, self.hidden, **self.kw)(acts_flat)
+      x2 = nn.act(self.act)(self.sub('dynin2norm', nn.Norm, self.norm)(x2))
+      preproc_flat = jnp.concatenate([x0, x1, x2], -1)
       moe_core = self._moe_core()
       _, router_weights = moe_core(deter_flat, preproc_flat)
       balance = MoECore.compute_balance_loss(router_weights, self.balance_coef)
