@@ -156,6 +156,7 @@ class RSSM(nj.Module):
       losses['balance'] = jnp.full_like(dyn, balance)
     metrics['dyn_ent'] = self._dist(prior).entropy().mean()
     metrics['rep_ent'] = self._dist(post).entropy().mean()
+    feat['prior_logit'] = prior  # expose prior for TRD negative samples
     return carry, entries, losses, feat, metrics
 
   def _moe_core(self):
