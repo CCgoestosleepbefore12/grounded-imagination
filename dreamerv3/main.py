@@ -225,6 +225,7 @@ def make_env(config, index, **overrides):
       'dmlab': 'embodied.envs.dmlab:DMLab',
       'minecraft': 'embodied.envs.minecraft:Minecraft',
       'loconav': 'embodied.envs.loconav:LocoNav',
+      'metaworld': 'embodied.envs.metaworld:MetaWorld',
       'pinpad': 'embodied.envs.pinpad:PinPad',
       'langroom': 'embodied.envs.langroom:LangRoom',
       'procgen': 'embodied.envs.procgen:ProcGen',
