@@ -10,21 +10,21 @@ mkdir -p $BASE
 # Grounded Imagination (MoE + TRD)
 CUDA_VISIBLE_DEVICES=0 nohup python -m dreamerv3.main --configs dmc_vision --task dmc_cup_catch   --seed 0 --logdir $BASE/grounded_cup_catch_s0   --agent.dyn.rssm.moe True --agent.grounded.enabled True --run.steps 1.1e6 --run.train_ratio 512 > $BASE/log_g_cup_s0.txt 2>&1 &
 sleep 5
-CUDA_VISIBLE_DEVICES=1 nohup python -m dreamerv3.main --configs dmc_vision --task dmc_pick_place  --seed 0 --logdir $BASE/grounded_pick_place_s0 --agent.dyn.rssm.moe True --agent.grounded.enabled True --run.steps 1.1e6 --run.train_ratio 512 > $BASE/log_g_pp_s0.txt 2>&1 &
+CUDA_VISIBLE_DEVICES=1 nohup python -m dreamerv3.main --configs dmc_vision --task dmc_manipulator_bring_ball  --seed 0 --logdir $BASE/grounded_bring_ball_s0 --agent.dyn.rssm.moe True --agent.grounded.enabled True --run.steps 1.1e6 --run.train_ratio 512 > $BASE/log_g_pp_s0.txt 2>&1 &
 sleep 5
-CUDA_VISIBLE_DEVICES=2 nohup python -m dreamerv3.main --configs dmc_vision --task dmc_pick_place  --seed 1 --logdir $BASE/grounded_pick_place_s1 --agent.dyn.rssm.moe True --agent.grounded.enabled True --run.steps 1.1e6 --run.train_ratio 512 > $BASE/log_g_pp_s1.txt 2>&1 &
+CUDA_VISIBLE_DEVICES=2 nohup python -m dreamerv3.main --configs dmc_vision --task dmc_manipulator_bring_ball  --seed 1 --logdir $BASE/grounded_bring_ball_s1 --agent.dyn.rssm.moe True --agent.grounded.enabled True --run.steps 1.1e6 --run.train_ratio 512 > $BASE/log_g_pp_s1.txt 2>&1 &
 sleep 5
-CUDA_VISIBLE_DEVICES=3 nohup python -m dreamerv3.main --configs dmc_vision --task dmc_pick_place  --seed 2 --logdir $BASE/grounded_pick_place_s2 --agent.dyn.rssm.moe True --agent.grounded.enabled True --run.steps 1.1e6 --run.train_ratio 512 > $BASE/log_g_pp_s2.txt 2>&1 &
+CUDA_VISIBLE_DEVICES=3 nohup python -m dreamerv3.main --configs dmc_vision --task dmc_manipulator_bring_ball  --seed 2 --logdir $BASE/grounded_bring_ball_s2 --agent.dyn.rssm.moe True --agent.grounded.enabled True --run.steps 1.1e6 --run.train_ratio 512 > $BASE/log_g_pp_s2.txt 2>&1 &
 sleep 5
 
 # Vanilla DreamerV3 baseline (no MoE, no TRD)
 CUDA_VISIBLE_DEVICES=4 nohup python -m dreamerv3.main --configs dmc_vision --task dmc_cup_catch   --seed 0 --logdir $BASE/baseline_cup_catch_s0   --run.steps 1.1e6 --run.train_ratio 512 > $BASE/log_b_cup_s0.txt 2>&1 &
 sleep 5
-CUDA_VISIBLE_DEVICES=5 nohup python -m dreamerv3.main --configs dmc_vision --task dmc_pick_place  --seed 0 --logdir $BASE/baseline_pick_place_s0 --run.steps 1.1e6 --run.train_ratio 512 > $BASE/log_b_pp_s0.txt 2>&1 &
+CUDA_VISIBLE_DEVICES=5 nohup python -m dreamerv3.main --configs dmc_vision --task dmc_manipulator_bring_ball  --seed 0 --logdir $BASE/baseline_bring_ball_s0 --run.steps 1.1e6 --run.train_ratio 512 > $BASE/log_b_pp_s0.txt 2>&1 &
 sleep 5
-CUDA_VISIBLE_DEVICES=6 nohup python -m dreamerv3.main --configs dmc_vision --task dmc_pick_place  --seed 1 --logdir $BASE/baseline_pick_place_s1 --run.steps 1.1e6 --run.train_ratio 512 > $BASE/log_b_pp_s1.txt 2>&1 &
+CUDA_VISIBLE_DEVICES=6 nohup python -m dreamerv3.main --configs dmc_vision --task dmc_manipulator_bring_ball  --seed 1 --logdir $BASE/baseline_bring_ball_s1 --run.steps 1.1e6 --run.train_ratio 512 > $BASE/log_b_pp_s1.txt 2>&1 &
 sleep 5
-CUDA_VISIBLE_DEVICES=7 nohup python -m dreamerv3.main --configs dmc_vision --task dmc_pick_place  --seed 2 --logdir $BASE/baseline_pick_place_s2 --run.steps 1.1e6 --run.train_ratio 512 > $BASE/log_b_pp_s2.txt 2>&1 &
+CUDA_VISIBLE_DEVICES=7 nohup python -m dreamerv3.main --configs dmc_vision --task dmc_manipulator_bring_ball  --seed 2 --logdir $BASE/baseline_bring_ball_s2 --run.steps 1.1e6 --run.train_ratio 512 > $BASE/log_b_pp_s2.txt 2>&1 &
 
 echo "All 8 experiments launched."
 echo "Monitor: nvidia-smi"
