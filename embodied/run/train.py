@@ -128,7 +128,7 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
       try:
         # Set state to timestep t, apply action taken at state t
         correction_env.set_state(qpos[b, t], qvel[b, t])
-        act = {k: v[b, t + 1] for k, v in actions.items()}
+        act = {k: v[b, t] for k, v in actions.items()}
         act['reset'] = False
         obs = correction_env.step(act)
 

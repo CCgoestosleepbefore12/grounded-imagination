@@ -27,7 +27,7 @@ class SpectralNormLinear(nj.Module):
         kernel = self.value(
             'kernel', nn.init('normal_in'), (in_dim, self.units))
         u = self.value('u', lambda shape: jax.random.normal(
-            jax.random.PRNGKey(0), shape), (1, self.units))
+            nj.seed(), shape), (1, self.units))
         # Power iteration to estimate sigma_max
         u_hat, v_hat = u, None
         for _ in range(self.n_power_iter):
@@ -87,8 +87,9 @@ class TRD(nj.Module):
             Scalar loss.
         """
         eps = 1e-7
-        # Real: label = label_smooth (not 1.0, for smoothing)
-        loss_real = -label_smooth * jnp.log(scores_real + eps)
-        # Fake: label = 0
+        # Real: target = label_smooth, full BCE
+        loss_real = -(label_smooth * jnp.log(scores_real + eps) +
+                      (1 - label_smooth) * jnp.log(1 - scores_real + eps))
+        # Fake: target = 0
         loss_fake = -jnp.log(1 - scores_fake + eps)
         return (loss_real + loss_fake).mean()

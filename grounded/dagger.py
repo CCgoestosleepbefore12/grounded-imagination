@@ -71,8 +71,8 @@ def action_replay_correct(env, qpos_0, qvel_0, actions, boundary_k):
         obs, _, _, _ = env.step(actions[i])
 
     # Record s_k state
-    qpos_k = env.get_state()[0] if hasattr(env, 'get_state') else None
-    qvel_k = env.get_state()[1] if hasattr(env, 'get_state') else None
+    state_k = env.get_state() if hasattr(env, 'get_state') else (None, None)
+    qpos_k, qvel_k = state_k
     obs_k = obs
 
     # Execute action at boundary to get real s_{k+1}
