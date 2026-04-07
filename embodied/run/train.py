@@ -76,9 +76,6 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
   carry_train = [agent.init_train(args.batch_size)]
   carry_report = agent.init_report(args.batch_size)
 
-  # Store last batch for DAgger
-  last_batch = [None]
-
   def trainfn(tran, worker):
     nonlocal dagger_counter
     if len(replay) < args.batch_size * args.batch_length:
@@ -94,13 +91,18 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
 
       # Grounded: DAgger correction
       if grounded and correction_env is not None:
-        last_batch[0] = batch
         dagger_counter += 1
         if dagger_counter % K_DAGGER == 0 and 'trd_scores' in outs:
           _dagger_correct(outs, batch)
 
   def _dagger_correct(outs, batch):
-    """Collect DAgger corrections at low-trust transitions."""
+    """Collect DAgger corrections at low-trust transitions.
+
+    TRD scores shape: (B, T-1), where score[b, t] measures transition
+    from timestep t to t+1 (z[:,t] → z[:,t+1]).
+    To correct: set_state to qpos[b, t], step with action[b, t+1]
+    (action[t+1] = prevact at t+1 = action taken at state t).
+    """
     trd_scores = np.asarray(outs['trd_scores'])  # (B, T-1)
     if 'qpos' not in batch or 'qvel' not in batch:
       return
@@ -110,31 +112,32 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
                if k in agent.act_space}  # (B, T, act_dim)
 
     # Find worst transitions (lowest TRD scores)
+    N_CORRECT = 4
     flat_scores = trd_scores.reshape(-1)
-    n_correct = min(4, len(flat_scores))
+    n_correct = min(N_CORRECT, len(flat_scores))
     worst_idx = np.argpartition(flat_scores, n_correct)[:n_correct]
 
     corrections = 0
     for idx in worst_idx:
       b = idx // trd_scores.shape[1]
-      t = idx % trd_scores.shape[1]
-      t_actual = t + 1  # TRD scores are for transitions t→t+1, offset by 1
+      t = idx % trd_scores.shape[1]  # transition from t to t+1
 
-      if t_actual >= qpos.shape[1] - 1:
+      if t + 1 >= qpos.shape[1]:
         continue
 
       try:
-        # Set state and collect correct transition
-        correction_env.set_state(qpos[b, t_actual], qvel[b, t_actual])
-        act = {k: v[b, t_actual + 1] for k, v in actions.items()}
+        # Set state to timestep t, apply action taken at state t
+        correction_env.set_state(qpos[b, t], qvel[b, t])
+        act = {k: v[b, t + 1] for k, v in actions.items()}
         act['reset'] = False
         obs = correction_env.step(act)
 
-        # Add correction to replay with worker=-1 (special correction worker)
+        # Mark as episode start for replay buffer consistency
+        obs['is_first'] = True
         replay.add(obs, worker=-1)
         corrections += 1
       except Exception as e:
-        pass  # Skip failed corrections silently
+        print(f'DAgger correction failed: {e}')
 
     if corrections > 0:
       train_agg.add({'dagger/corrections': corrections}, prefix='train')

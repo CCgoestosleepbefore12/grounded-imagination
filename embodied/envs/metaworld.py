@@ -85,6 +85,7 @@ class MetaWorld(embodied.Env):
     self._env.data.qpos[:] = qpos
     self._env.data.qvel[:] = qvel
     mujoco.mj_forward(self._env.model, self._env.data)
+    self._done = False  # prevent step() from triggering reset
 
   def _render(self):
     import mujoco

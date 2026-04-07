@@ -152,7 +152,10 @@ class Agent(embodied.jax.Agent):
         self.loss, carry, obs, prevact, training=True, has_aux=True)
     metrics.update(mets)
     self.slowval.update()
+    trd_scores = outs.get('trd_scores')
     outs = {}
+    if trd_scores is not None:
+      outs['trd_scores'] = trd_scores
     if self.config.replay_context:
       updates = elements.tree.flatdict(dict(
           stepid=stepid, enc=entries[0], dyn=entries[1], dec=entries[2]))
