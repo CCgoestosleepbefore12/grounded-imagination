@@ -27,6 +27,15 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
   should_report = embodied.LocalClock(args.report_every)
   should_save = embodied.LocalClock(args.save_every)
 
+  # Grounded: DAgger correction environment
+  correction_env = None
+  dagger_counter = 0
+  grounded = getattr(agent, 'grounded', False)
+  if grounded:
+    K_DAGGER = 128  # correct every 128 training steps
+    correction_env = make_env(0)
+    print('DAgger: created correction environment')
+
   @elements.timer.section('logfn')
   def logfn(tran, worker):
     episode = episodes[worker]
@@ -67,7 +76,11 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
   carry_train = [agent.init_train(args.batch_size)]
   carry_report = agent.init_report(args.batch_size)
 
+  # Store last batch for DAgger
+  last_batch = [None]
+
   def trainfn(tran, worker):
+    nonlocal dagger_counter
     if len(replay) < args.batch_size * args.batch_length:
       return
     for _ in range(should_train(step)):
@@ -78,6 +91,54 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
       if 'replay' in outs:
         replay.update(outs['replay'])
       train_agg.add(mets, prefix='train')
+
+      # Grounded: DAgger correction
+      if grounded and correction_env is not None:
+        last_batch[0] = batch
+        dagger_counter += 1
+        if dagger_counter % K_DAGGER == 0 and 'trd_scores' in outs:
+          _dagger_correct(outs, batch)
+
+  def _dagger_correct(outs, batch):
+    """Collect DAgger corrections at low-trust transitions."""
+    trd_scores = np.asarray(outs['trd_scores'])  # (B, T-1)
+    if 'qpos' not in batch or 'qvel' not in batch:
+      return
+    qpos = np.asarray(batch['qpos'])    # (B, T, nq)
+    qvel = np.asarray(batch['qvel'])    # (B, T, nv)
+    actions = {k: np.asarray(v) for k, v in batch.items()
+               if k in agent.act_space}  # (B, T, act_dim)
+
+    # Find worst transitions (lowest TRD scores)
+    flat_scores = trd_scores.reshape(-1)
+    n_correct = min(4, len(flat_scores))
+    worst_idx = np.argpartition(flat_scores, n_correct)[:n_correct]
+
+    corrections = 0
+    for idx in worst_idx:
+      b = idx // trd_scores.shape[1]
+      t = idx % trd_scores.shape[1]
+      t_actual = t + 1  # TRD scores are for transitions t→t+1, offset by 1
+
+      if t_actual >= qpos.shape[1] - 1:
+        continue
+
+      try:
+        # Set state and collect correct transition
+        correction_env.set_state(qpos[b, t_actual], qvel[b, t_actual])
+        act = {k: v[b, t_actual + 1] for k, v in actions.items()}
+        act['reset'] = False
+        obs = correction_env.step(act)
+
+        # Add correction to replay with worker=-1 (special correction worker)
+        replay.add(obs, worker=-1)
+        corrections += 1
+      except Exception as e:
+        pass  # Skip failed corrections silently
+
+    if corrections > 0:
+      train_agg.add({'dagger/corrections': corrections}, prefix='train')
+
   driver.on_step(trainfn)
 
   cp = elements.Checkpoint(logdir / 'ckpt')
@@ -116,4 +177,6 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
     if should_save(step):
       cp.save()
 
+  if correction_env is not None:
+    correction_env.close()
   logger.close()

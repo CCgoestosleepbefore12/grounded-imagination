@@ -25,12 +25,16 @@ class MetaWorld(embodied.Env):
     self._done = True
     self._info = None
     self._renderer = None
+    self._nq = env.model.nq
+    self._nv = env.model.nv
 
   @functools.cached_property
   def obs_space(self):
     obs = self._env.observation_space
     spaces = {
         'proprio': elements.Space(np.float32, obs.shape, obs.low, obs.high),
+        'qpos': elements.Space(np.float32, (self._nq,)),
+        'qvel': elements.Space(np.float32, (self._nv,)),
         'reward': elements.Space(np.float32),
         'is_first': elements.Space(bool),
         'is_last': elements.Space(bool),
@@ -64,6 +68,8 @@ class MetaWorld(embodied.Env):
   def _obs(self, obs, reward, is_first=False, is_last=False, is_terminal=False):
     result = {
         'proprio': np.float32(obs),
+        'qpos': np.float32(self._env.data.qpos.copy()),
+        'qvel': np.float32(self._env.data.qvel.copy()),
         'reward': np.float32(reward),
         'is_first': is_first,
         'is_last': is_last,
@@ -72,6 +78,13 @@ class MetaWorld(embodied.Env):
     if self._image:
       result['image'] = self._render()
     return result
+
+  def set_state(self, qpos, qvel):
+    """Set MuJoCo state for DAgger action replay."""
+    import mujoco
+    self._env.data.qpos[:] = qpos
+    self._env.data.qvel[:] = qvel
+    mujoco.mj_forward(self._env.model, self._env.data)
 
   def _render(self):
     import mujoco

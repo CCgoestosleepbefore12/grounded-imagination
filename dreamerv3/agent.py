@@ -36,7 +36,7 @@ class Agent(embodied.jax.Agent):
     self.act_space = act_space
     self.config = config
 
-    exclude = ('is_first', 'is_last', 'is_terminal', 'reward')
+    exclude = ('is_first', 'is_last', 'is_terminal', 'reward', 'qpos', 'qvel')
     enc_space = {k: v for k, v in obs_space.items() if k not in exclude}
     dec_space = {k: v for k, v in obs_space.items() if k not in exclude}
     self.enc = {
@@ -313,6 +313,9 @@ class Agent(embodied.jax.Agent):
     carry = (enc_carry, dyn_carry, dec_carry)
     entries = (enc_entries, dyn_entries, dec_entries)
     outs = {'tokens': tokens, 'repfeat': repfeat, 'losses': losses}
+    if self.grounded:
+      # Per-transition TRD scores for DAgger (B, T-1)
+      outs['trd_scores'] = scores_real.reshape(B, T - 1)
     return loss, (carry, entries, outs, metrics)
 
   def report(self, carry, data):
