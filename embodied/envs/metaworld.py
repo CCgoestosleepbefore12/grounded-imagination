@@ -24,6 +24,9 @@ class MetaWorld(embodied.Env):
     self._done = True
     self._info = None
     self._seed = seed
+    # Create renderer once, reuse every step
+    import mujoco
+    self._renderer = mujoco.Renderer(env.model, *size)
 
   @functools.cached_property
   def obs_space(self):
@@ -71,15 +74,9 @@ class MetaWorld(embodied.Env):
 
   def _render(self):
     import mujoco
-    # Use MuJoCo offscreen rendering directly
-    model = self._env.model
-    data = self._env.data
-    renderer = mujoco.Renderer(model, *self._size)
-    mujoco.mj_forward(model, data)
-    renderer.update_scene(data)
-    image = renderer.render()
-    renderer.close()
-    return np.uint8(image)
+    mujoco.mj_forward(self._env.model, self._env.data)
+    self._renderer.update_scene(self._env.data)
+    return np.uint8(self._renderer.render())
 
   def close(self):
     try:
