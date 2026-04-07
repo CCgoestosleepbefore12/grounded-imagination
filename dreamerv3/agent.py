@@ -11,7 +11,10 @@ import numpy as np
 import optax
 
 from . import rssm
-from grounded.trd import TRD
+try:
+  from grounded.trd import TRD
+except ImportError:
+  TRD = None
 
 f32 = jnp.float32
 i32 = jnp.int32

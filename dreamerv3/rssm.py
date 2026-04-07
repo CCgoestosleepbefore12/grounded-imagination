@@ -9,7 +9,10 @@ import jax.numpy as jnp
 import ninjax as nj
 import numpy as np
 
-from grounded.moe_dynamics import MoECore
+try:
+  from grounded.moe_dynamics import MoECore
+except ImportError:
+  MoECore = None
 
 f32 = jnp.float32
 sg = jax.lax.stop_gradient
