@@ -122,8 +122,10 @@ defaults:
       trd_hidden: 256
       tau: 0.15
       trust_gamma: 0.5
-      trd_scale: 1.0
+      trd_scale: 0.0625
       balance_scale: 0.01
+      imag_length: 20
+      warmup_steps: 5000
 
 size1m: &size1m
   .*\.rssm: {deter: 512, hidden: 64, classes: 4}
@@ -198,6 +200,7 @@ metaworld:
   <<: *size50m
   task: metaworld_pick_place
   env.metaworld.image: False
+  agent.imag_length: 20
   replay.fracs: {uniform: 0.5, priority: 0.5, recency: 0.0}
   replay.prio: {exponent: 0.6, maxfrac: 0.0, initial: 1.0, zero_on_sample: False}
   run: {steps: 1.1e6, envs: 16, train_ratio: 512}

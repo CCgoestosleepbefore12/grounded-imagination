@@ -30,11 +30,17 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
   # Grounded: DAgger correction environment
   correction_env = None
   dagger_counter = 0
+  train_step_counter = 0
   grounded = getattr(agent, 'grounded', False)
+  WARMUP_STEPS = 5000
   if grounded:
-    K_DAGGER = 128  # correct every 128 training steps
+    K_DAGGER = 128
+    try:
+      WARMUP_STEPS = int(agent.config.grounded.warmup_steps)
+    except Exception:
+      pass
     correction_env = make_env(0)
-    print('DAgger: created correction environment')
+    print(f'DAgger: created correction env (warmup={WARMUP_STEPS})')
 
   @elements.timer.section('logfn')
   def logfn(tran, worker):
@@ -77,7 +83,7 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
   carry_report = agent.init_report(args.batch_size)
 
   def trainfn(tran, worker):
-    nonlocal dagger_counter
+    nonlocal dagger_counter, train_step_counter
     if len(replay) < args.batch_size * args.batch_length:
       return
     for _ in range(should_train(step)):
@@ -85,15 +91,20 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
         batch = next(stream_train)
       carry_train[0], outs, mets = agent.train(carry_train[0], batch)
       train_fps.step(batch_steps)
+      train_step_counter += 1
       if 'replay' in outs:
+        # Skip priority updates during warmup (TRD not yet reliable)
+        if grounded and train_step_counter < WARMUP_STEPS:
+          outs['replay'].pop('priority', None)
         replay.update(outs['replay'])
       train_agg.add(mets, prefix='train')
 
-      # Grounded: DAgger correction
+      # Grounded: DAgger correction (skip during warmup)
       if grounded and correction_env is not None:
-        dagger_counter += 1
-        if dagger_counter % K_DAGGER == 0 and 'trd_scores' in outs:
-          _dagger_correct(outs, batch)
+        if train_step_counter >= WARMUP_STEPS:
+          dagger_counter += 1
+          if dagger_counter % K_DAGGER == 0 and 'trd_scores' in outs:
+            _dagger_correct(outs, batch)
 
   def _dagger_correct(outs, batch):
     """Collect DAgger corrections at low-trust transitions.
@@ -134,7 +145,7 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
 
         # Mark as episode start for replay buffer consistency
         obs['is_first'] = True
-        replay.add(obs, worker=-1)
+        replay.add(obs, worker=9999)  # dedicated DAgger worker ID
         corrections += 1
       except Exception as e:
         print(f'DAgger correction failed: {e}')
