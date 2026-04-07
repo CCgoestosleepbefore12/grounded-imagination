@@ -11,8 +11,10 @@ import numpy as np
 
 try:
   from grounded.moe_dynamics import MoECore
+  from grounded.block_gru import block_gru_step
 except ImportError:
   MoECore = None
+  block_gru_step = None
 
 f32 = jnp.float32
 sg = jax.lax.stop_gradient
@@ -186,21 +188,11 @@ class RSSM(nj.Module):
       moe_core = self._moe_core()
       deter, _ = moe_core(deter, preproc)
     else:
-      g = self.blocks
-      flat2group = lambda x: einops.rearrange(x, '... (g h) -> ... g h', g=g)
-      group2flat = lambda x: einops.rearrange(x, '... g h -> ... (g h)', g=g)
-      x = preproc[..., None, :].repeat(g, -2)
-      x = group2flat(jnp.concatenate([flat2group(deter), x], -1))
-      for i in range(self.dynlayers):
-        x = self.sub(f'dynhid{i}', nn.BlockLinear, self.deter, g, **self.kw)(x)
-        x = nn.act(self.act)(self.sub(f'dynhid{i}norm', nn.Norm, self.norm)(x))
-      x = self.sub('dyngru', nn.BlockLinear, 3 * self.deter, g, **self.kw)(x)
-      gates = jnp.split(flat2group(x), 3, -1)
-      reset, cand, update = [group2flat(x) for x in gates]
-      reset = jax.nn.sigmoid(reset)
-      cand = jnp.tanh(reset * cand)
-      update = jax.nn.sigmoid(update - 1)
-      deter = update * cand + (1 - update) * deter
+      preproc_grouped = preproc[..., None, :].repeat(self.blocks, -2)
+      deter = block_gru_step(
+          self, 'dyn', deter, preproc_grouped,
+          self.blocks, self.deter, self.dynlayers,
+          self.act, self.norm, **self.kw)
     return deter
 
   def _prior(self, feat):

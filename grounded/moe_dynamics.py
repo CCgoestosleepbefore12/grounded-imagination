@@ -4,13 +4,12 @@ Replaces the single Block GRU dynamics in RSSM._core with
 multiple homogeneous experts + Top-2 soft routing.
 """
 
-import einops
 import jax
 import jax.numpy as jnp
 import ninjax as nj
 import embodied.jax.nets as nn
 
-f32 = jnp.float32
+from grounded.block_gru import block_gru_step
 
 
 class MoECore(nj.Module):
@@ -77,36 +76,11 @@ class MoECore(nj.Module):
         return new_deter, router_weights
 
     def _expert(self, name, deter, preproc_grouped):
-        """Single Block GRU expert.
-
-        Args:
-            name: Unique name prefix for this expert's parameters.
-            deter: Previous deterministic state. # (B, deter)
-            preproc_grouped: Precomputed grouped preproc. # (B, g, hidden*3)
-
-        Returns:
-            new_deter: Updated deterministic state. # (B, deter)
-        """
-        g = self.blocks
-        flat2group = lambda x: einops.rearrange(x, '... (g h) -> ... g h', g=g)
-        group2flat = lambda x: einops.rearrange(x, '... g h -> ... (g h)', g=g)
-
-        x = group2flat(jnp.concatenate([flat2group(deter), preproc_grouped], -1))
-
-        for i in range(self.dynlayers):
-            x = self.sub(f'{name}_hid{i}', nn.BlockLinear,
-                         self.deter, g, **self.kw)(x)
-            x = nn.act(self.act)(
-                self.sub(f'{name}_hid{i}n', nn.Norm, self.norm)(x))
-
-        x = self.sub(f'{name}_gru', nn.BlockLinear,
-                     3 * self.deter, g, **self.kw)(x)
-        gates = jnp.split(flat2group(x), 3, -1)
-        reset, cand, update = [group2flat(g_) for g_ in gates]
-        reset = jax.nn.sigmoid(reset)
-        cand = jnp.tanh(reset * cand)
-        update = jax.nn.sigmoid(update - 1)
-        return update * cand + (1 - update) * deter  # (B, deter)
+        """Single Block GRU expert (delegates to shared block_gru_step)."""
+        return block_gru_step(
+            self, f'{name}_', deter, preproc_grouped,
+            self.blocks, self.deter, self.dynlayers,
+            self.act, self.norm, **self.kw)
 
     @staticmethod
     def compute_balance_loss(router_weights, coef=0.01):

@@ -9,8 +9,6 @@ import jax.numpy as jnp
 import ninjax as nj
 import embodied.jax.nets as nn
 
-f32 = jnp.float32
-
 
 class SpectralNormLinear(nj.Module):
     """Linear layer with spectral normalization via power iteration.
