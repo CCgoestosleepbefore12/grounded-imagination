@@ -168,10 +168,10 @@ class Agent(embodied.jax.Agent):
           (B, T), {k: v.shape for k, v in updates.items()})
       # Grounded: TRD-based priority (low trust → high priority)
       if self.grounded and trd_scores is not None:
-        # trd_scores: (B, T-1), pad to (B, T) with 1.0 for first step
+        from grounded.prioritized import compute_priorities
         padded = jnp.concatenate([
             jnp.ones((B, 1), dtype=trd_scores.dtype), trd_scores], axis=1)
-        updates['priority'] = 1.0 - padded  # low TRD → high priority
+        updates['priority'] = compute_priorities(padded)
       outs['replay'] = updates
     carry = (*carry, {k: data[k][:, -1] for k in self.act_space})
     return carry, outs, metrics
@@ -211,7 +211,6 @@ class Agent(embodied.jax.Agent):
           repfeat, prevact, dyn_extras, B, T)
       metrics.update(trd_mets)
 
-    B, T = reset.shape
     shapes = {k: v.shape for k, v in losses.items()}
     assert all(x == (B, T) for x in shapes.values()), ((B, T), shapes)
 
