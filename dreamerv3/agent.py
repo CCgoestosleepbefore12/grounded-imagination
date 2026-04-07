@@ -13,6 +13,7 @@ import optax
 from . import rssm
 try:
   from grounded.trd import TRD
+  from grounded.integration import compute_trd_loss, compute_trust_weights
 except ImportError:
   TRD = None
 
@@ -205,27 +206,10 @@ class Agent(embodied.jax.Agent):
 
     # Grounded: TRD training loss
     if self.grounded:
-      # Real transitions: posterior feat (corrected by observation)
-      z = sg(self.feat2tensor(repfeat))  # (B, T, z_dim)
-      z_t = z[:, :-1]  # (B, T-1, z_dim)
-      z_next_real = z[:, 1:]  # (B, T-1, z_dim)
-      a_t = nn.cast(nn.DictConcat(self.act_space, 1)(prevact)[:, 1:])  # (B, T-1, a_dim)
-      # Fake transitions: prior stoch (model prediction without observation)
-      prior_logit = dyn_extras['prior_logit']  # (B, T, stoch, classes)
-      prior_stoch = nn.cast(jax.nn.softmax(prior_logit, axis=-1))
-      fake_feat = dict(deter=repfeat['deter'], stoch=prior_stoch)
-      z_fake = sg(self.feat2tensor(fake_feat))  # (B, T, z_dim)
-      z_next_pred = z_fake[:, 1:]  # (B, T-1, z_dim)
-      # Flatten and score
-      BT1 = B * (T - 1)
-      z_t_flat = z_t.reshape(BT1, -1)
-      a_t_flat = a_t.reshape(BT1, -1)
-      scores_real = self.trd(z_t_flat, a_t_flat, z_next_real.reshape(BT1, -1))
-      scores_fake = self.trd(z_t_flat, a_t_flat, z_next_pred.reshape(BT1, -1))
-      trd_loss = TRD.train_loss(scores_real, scores_fake)
-      losses['trd'] = jnp.full((B, T), trd_loss)
-      metrics['trd_score_real'] = scores_real.mean()
-      metrics['trd_score_fake'] = scores_fake.mean()
+      losses['trd'], scores_real, trd_mets = compute_trd_loss(
+          self.trd, self.feat2tensor, self.act_space,
+          repfeat, prevact, dyn_extras, B, T)
+      metrics.update(trd_mets)
 
     B, T = reset.shape
     shapes = {k: v.shape for k, v in losses.items()}
@@ -250,35 +234,10 @@ class Agent(embodied.jax.Agent):
     # Grounded: compute cumulative trust weights for imagination
     imag_trust = None
     if self.grounded:
-      # TRD scores on imagined transitions: (B*K, H+1) feat → (B*K, H) pairs
-      z_img = sg(inp)  # (B*K, H+1, z_dim)
-      z_img_t = z_img[:, :-1]  # (B*K, H, z_dim)
-      z_img_next = z_img[:, 1:]  # (B*K, H, z_dim)
-      a_img = nn.cast(nn.DictConcat(self.act_space, 1)(imgact)[:, :-1])  # (B*K, H, a_dim)
-      BK, Hsteps = z_img_t.shape[:2]
-      trust_per_step = self.trd(
-          z_img_t.reshape(BK * Hsteps, -1),
-          a_img.reshape(BK * Hsteps, -1),
-          z_img_next.reshape(BK * Hsteps, -1),
-      ).reshape(BK, Hsteps)  # (B*K, H)
-      # Discounted cumulative trust: cum_t = trust_t * cum_{t-1}^γ
-      # γ=1.0: original cumprod, γ=0.0: independent, γ=0.5: balanced
-      gamma = self.config.grounded.trust_gamma
-      log_trust = jnp.log(trust_per_step + 1e-8)  # (B*K, H)
-      def _discounted_scan(log_cum_prev, log_t):
-        log_cum = log_t + gamma * log_cum_prev
-        return log_cum, log_cum
-      _, log_cum_trust = jax.lax.scan(
-          _discounted_scan,
-          jnp.zeros(BK, dtype=log_trust.dtype),  # initial log_cum = 0
-          log_trust.transpose(1, 0))  # scan over H dimension
-      imag_trust = jnp.exp(log_cum_trust.transpose(1, 0))  # (B*K, H)
-      # Pad with 1.0 at the start (first step has full trust)
-      imag_trust = jnp.concatenate([
-          jnp.ones((BK, 1), dtype=imag_trust.dtype), imag_trust], axis=1)
-      metrics['imag_trust_mean'] = imag_trust.mean()
-      metrics['imag_trust_min'] = imag_trust.min()
-      metrics['imag_effective_steps'] = (imag_trust > self.config.grounded.tau).sum(1).mean()
+      imag_trust, trust_mets = compute_trust_weights(
+          self.trd, self.feat2tensor, self.act_space, inp, imgact,
+          self.config.grounded.trust_gamma, self.config.grounded.tau)
+      metrics.update(trust_mets)
 
     los, imgloss_out, mets = imag_loss(
         imgact,
