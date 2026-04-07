@@ -132,10 +132,63 @@ trust=0.35 (接触区域):
 
 ---
 
-## 待记录
+## 第二轮实验：MetaWorld 操作任务（proprio only）
 
-### 第一轮最终结果
-（等实验跑完后补充）
+### 配置
+- 日期：2026-04-07 启动
+- 硬件：8×A100
+- 配置：metaworld (size50m), 1.1M steps, train_ratio=512, envs=16, proprio only
+- Grounded：MoE + TRD + 折扣累积信任 gamma=0.5（无 DAgger, 无优先级采样，旧代码）
+- Baseline：原版 DreamerV3
 
-### 第二轮实验：MetaWorld 操作任务
-（待启动，需验证折扣累积信任的效果）
+### 中期结果 (2026-04-08)
+
+| 任务 | Grounded | Baseline | 差距 |
+|------|----------|----------|------|
+| reach (简单) | 4807 | 4833 | -26 (持平) |
+| push (中等) | 4216 | 4748 | **-532** |
+| door-open (中等) | 1799 | 4242 | **-2443** |
+| pick-place (难) | 6.24 | 3030 | **-3024** |
+| cup_catch (DMC) | 986 | 965 | +21 (持平) |
+| bring_ball (DMC) | ~0 | ~0 | 持平 |
+
+### 关键发现
+
+#### 发现 4：Grounded 在操作任务上全面落后 Baseline
+
+- **现象**：除 reach（最简单）持平外，push/door-open/pick-place 全部大幅落后
+- **TRD 指标**：trd_score_real=0.65-0.69, trd_score_fake=0.28-0.31
+  - TRD 能区分真假，但 real 分数仍然不够高
+  - 折扣累积 (gamma=0.5) 后收敛值 ≈ 0.66^2 = 0.44
+  - 想象数据被降权到 0.44 × 原始权重，严重削弱策略学习
+- **根因确认**：TRD 信任加权机制在当前设计下是有害的
+  - 它学到的是 posterior vs prior 的统计差异，不是"想象质量"
+  - 即使世界模型很准，TRD 也给不了接近 1.0 的分数
+  - 结果：好的想象数据也被降权 → 策略学不好
+
+#### 发现 5：训练速度差异
+- Baseline MetaWorld (proprio): fps/policy ≈ 28-30
+- Grounded MetaWorld (proprio): fps/policy ≈ 10
+- Grounded 慢 3 倍（MoE + TRD 计算开销）
+
+### 诊断：问题在 MoE 还是 TRD？
+
+需要分离实验：
+- MoE only (moe=True, grounded=False)：如果恢复到 Baseline 水平或更好 → 问题在 TRD
+- TRD only (moe=False, grounded=True)：如果仍然落后 → 确认 TRD 是罪魁祸首
+
+### 下一步：MoE-only 实验
+
+在 pick-place 和 door-open 上跑 MoE-only vs Baseline，确认 MoE 本身是否有害。
+
+---
+
+## 第三轮实验：MoE-only 消融（A2 反向）
+
+### 目的
+确认性能下降来自 TRD 信任加权还是 MoE 架构本身。
+
+### 配置
+- MoE only: `--agent.dyn.rssm.moe True --agent.grounded.enabled False`
+- Baseline: 原版 DreamerV3（不变）
+- 任务: pick-place + door-open（下降最严重的两个）
