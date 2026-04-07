@@ -251,12 +251,23 @@ class Agent(embodied.jax.Agent):
           a_img.reshape(BK * Hsteps, -1),
           z_img_next.reshape(BK * Hsteps, -1),
       ).reshape(BK, Hsteps)  # (B*K, H)
-      imag_trust = jnp.cumprod(trust_per_step, axis=1)  # (B*K, H)
-      # imag_loss weight shape is (B*K, H+1), trust is (B*K, H)
+      # Discounted cumulative trust: cum_t = trust_t * cum_{t-1}^γ
+      # γ=1.0: original cumprod, γ=0.0: independent, γ=0.5: balanced
+      gamma = self.config.grounded.trust_gamma
+      log_trust = jnp.log(trust_per_step + 1e-8)  # (B*K, H)
+      def _discounted_scan(log_cum_prev, log_t):
+        log_cum = log_t + gamma * log_cum_prev
+        return log_cum, log_cum
+      _, log_cum_trust = jax.lax.scan(
+          _discounted_scan,
+          jnp.zeros(BK, dtype=log_trust.dtype),  # initial log_cum = 0
+          log_trust.transpose(1, 0))  # scan over H dimension
+      imag_trust = jnp.exp(log_cum_trust.transpose(1, 0))  # (B*K, H)
       # Pad with 1.0 at the start (first step has full trust)
       imag_trust = jnp.concatenate([
           jnp.ones((BK, 1), dtype=imag_trust.dtype), imag_trust], axis=1)
       metrics['imag_trust_mean'] = imag_trust.mean()
+      metrics['imag_trust_min'] = imag_trust.min()
       metrics['imag_effective_steps'] = (imag_trust > self.config.grounded.tau).sum(1).mean()
 
     los, imgloss_out, mets = imag_loss(

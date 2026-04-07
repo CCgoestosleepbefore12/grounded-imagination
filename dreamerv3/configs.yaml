@@ -121,6 +121,7 @@ defaults:
       enabled: False
       trd_hidden: 256
       tau: 0.15
+      trust_gamma: 0.5
       trd_scale: 1.0
       balance_scale: 0.01
 
