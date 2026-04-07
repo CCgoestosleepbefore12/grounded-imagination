@@ -1,123 +1,117 @@
-# Mastering Diverse Domains through World Models
+# Grounded Imagination
 
-A reimplementation of [DreamerV3][paper], a scalable and general reinforcement
-learning algorithm that masters a wide range of applications with fixed
-hyperparameters.
+**Learning When and How to Trust World Model Rollouts for Contact-Rich Manipulation**
 
-![DreamerV3 Tasks](https://user-images.githubusercontent.com/2111293/217647148-cbc522e2-61ad-4553-8e14-1ecdc8d9438b.gif)
+> MoE Dynamics + Transition Realism Discriminator + DAgger Active Correction
 
-If you find this code useful, please reference in your paper:
+Built on [DreamerV3](https://github.com/danijar/dreamerv3) (JAX).
+
+---
+
+## Problem
+
+World model imagination works well for simple tasks but fails catastrophically on contact-rich manipulation (e.g., pick-place, bring-ball). The dynamics change abruptly at contact, causing prediction errors that compound over imagination rollouts and corrupt policy training.
+
+## Approach
+
+Three complementary components:
+
+| Component | Problem Solved | Implementation |
+|-----------|---------------|----------------|
+| **MoE Dynamics** | Single MLP can't model multiple dynamics modes | Top-2 routed homogeneous Block GRU experts |
+| **TRD** | Don't know which imagination steps are trustworthy | Spectral-normed discriminator scoring (z_t, a_t, z_next) |
+| **DAgger Correction** | World model undertrained in policy-visited regions | Active data collection at low-trust states |
+
+Additionally:
+- **Discounted cumulative trust** (gamma=0.5) replaces naive cumprod to prevent over-penalization on easy tasks
+- **TRD-based prioritized replay** focuses model training on inaccurate regions
+
+## Project Structure
 
 ```
-@article{hafner2025dreamerv3,
-  title={Mastering diverse control tasks through world models},
-  author={Hafner, Danijar and Pasukonis, Jurgis and Ba, Jimmy and Lillicrap, Timothy},
-  journal={Nature},
-  pages={1--7},
-  year={2025},
-  publisher={Nature Publishing Group}
+dreamerv3/              # DreamerV3 (minimal modifications)
+  agent.py              #   +TRD init, +2 grounded function calls in loss()
+  rssm.py               #   +MoE option in _core(), +balance loss
+  configs.yaml          #   +grounded config block, +metaworld preset
+  main.py               #   +metaworld env registration
+
+grounded/               # Our contribution (all new code)
+  moe_dynamics.py       #   MoE Block GRU experts + Top-2 router
+  trd.py                #   Spectral-normed transition discriminator
+  integration.py        #   TRD loss + trust weight computation helpers
+  dagger.py             #   Trust boundary detection + action replay utilities
+  prioritized.py        #   Priority computation + IS weights + beta schedule
+  diagnostics.py        #   Analysis functions for paper visualizations
+
+embodied/
+  envs/metaworld.py     #   MetaWorld wrapper (proprio + optional image)
+  run/train.py          #   +DAgger correction loop, +warmup
+
+tests/                  # 44 unit tests
+scripts/                # Multi-GPU training launch scripts
+docs/
+  spec.md               # Full research specification
+  experiment_log.md     # Experiment results and findings
+```
+
+## Quick Start
+
+```bash
+# Install
+git clone https://github.com/CCgoestosleepbefore12/grounded-imagination.git
+cd grounded-imagination
+pip install -r requirements.txt
+pip install -e .
+
+# Run with Grounded Imagination enabled
+MUJOCO_GL=egl python -m dreamerv3.main \
+  --configs metaworld \
+  --task metaworld_pick_place \
+  --agent.dyn.rssm.moe True \
+  --agent.grounded.enabled True
+
+# Run vanilla DreamerV3 baseline
+MUJOCO_GL=egl python -m dreamerv3.main \
+  --configs metaworld \
+  --task metaworld_pick_place
+
+# Run tests
+python -m pytest tests/ -v
+```
+
+## Key Configuration
+
+```yaml
+agent:
+  dyn:
+    rssm:
+      moe: True            # Enable MoE dynamics
+      num_experts: 4        # Number of homogeneous experts
+      balance_coef: 0.01    # Load balancing loss weight
+  grounded:
+    enabled: True           # Enable TRD + trust weighting
+    trd_hidden: 256         # TRD hidden layer size
+    tau: 0.15               # Trust threshold
+    trust_gamma: 0.5        # Discount factor (0=independent, 1=cumprod)
+    trd_scale: 0.0625       # TRD loss scale (1/16, equiv K_trd=16)
+    warmup_steps: 5000      # Steps before enabling TRD/DAgger
+```
+
+## Toggle Features
+
+| Config | Effect |
+|--------|--------|
+| `grounded.enabled: False` + `moe: False` | Vanilla DreamerV3 |
+| `grounded.enabled: False` + `moe: True` | MoE only (Ablation A2 inverse) |
+| `grounded.enabled: True` + `moe: False` | TRD only (Ablation A2) |
+| `grounded.enabled: True` + `moe: True` | Full system |
+
+## Citation
+
+```
+@article{grounded_imagination_2026,
+  title={Grounded Imagination: Learning When and How to Trust World Model
+         Rollouts for Contact-Rich Manipulation},
+  year={2026}
 }
 ```
-
-To learn more:
-
-- [Research paper][paper]
-- [Project website][website]
-- [Twitter summary][tweet]
-
-## DreamerV3
-
-DreamerV3 learns a world model from experiences and uses it to train an actor
-critic policy from imagined trajectories. The world model encodes sensory
-inputs into categorical representations and predicts future representations and
-rewards given actions.
-
-![DreamerV3 Method Diagram](https://user-images.githubusercontent.com/2111293/217355673-4abc0ce5-1a4b-4366-a08d-64754289d659.png)
-
-DreamerV3 masters a wide range of domains with a fixed set of hyperparameters,
-outperforming specialized methods. Removing the need for tuning reduces the
-amount of expert knowledge and computational resources needed to apply
-reinforcement learning.
-
-![DreamerV3 Benchmark Scores](https://github.com/danijar/dreamerv3/assets/2111293/0fe8f1cf-6970-41ea-9efc-e2e2477e7861)
-
-Due to its robustness, DreamerV3 shows favorable scaling properties. Notably,
-using larger models consistently increases not only its final performance but
-also its data-efficiency. Increasing the number of gradient steps further
-increases data efficiency.
-
-![DreamerV3 Scaling Behavior](https://user-images.githubusercontent.com/2111293/217356063-0cf06b17-89f0-4d5f-85a9-b583438c98dd.png)
-
-# Instructions
-
-The code has been tested on Linux and Mac and requires Python 3.11+.
-
-## Docker
-
-You can either use the provided `Dockerfile` that contains instructions or
-follow the manual instructions below.
-
-## Manual
-
-Install [JAX][jax] and then the other dependencies:
-
-```sh
-pip install -U -r requirements.txt
-```
-
-Training script:
-
-```sh
-python dreamerv3/main.py \
-  --logdir ~/logdir/dreamer/{timestamp} \
-  --configs crafter \
-  --run.train_ratio 32
-```
-
-To reproduce results, train on the desired task using the corresponding config,
-such as `--configs atari --task atari_pong`.
-
-View results:
-
-```sh
-pip install -U scope
-python -m scope.viewer --basedir ~/logdir --port 8000
-```
-
-Scalar metrics are also writting as JSONL files.
-
-# Tips
-
-- All config options are listed in `dreamerv3/configs.yaml` and you can
-  override them as flags from the command line.
-- The `debug` config block reduces the network size, batch size, duration
-  between logs, and so on for fast debugging (but does not learn a good model).
-- By default, the code tries to run on GPU. You can switch to CPU or TPU using
-  the `--jax.platform cpu` flag.
-- You can use multiple config blocks that will override defaults in the
-  order they are specified, for example `--configs crafter size50m`.
-- By default, metrics are printed to the terminal, appended to a JSON lines
-  file, and written as Scope summaries. Other outputs like WandB and
-  TensorBoard can be enabled in the training script.
-- If you get a `Too many leaves for PyTreeDef` error, it means you're
-  reloading a checkpoint that is not compatible with the current config. This
-  often happens when reusing an old logdir by accident.
-- If you are getting CUDA errors, scroll up because the cause is often just an
-  error that happened earlier, such as out of memory or incompatible JAX and
-  CUDA versions. Try `--batch_size 1` to rule out an out of memory error.
-- Many environments are included, some of which require installing additional
-  packages. See the `Dockerfile` for reference.
-- To continue stopped training runs, simply run the same command line again and
-  make sure that the `--logdir` points to the same directory.
-
-# Disclaimer
-
-This repository contains a reimplementation of DreamerV3 based on the open
-source DreamerV2 code base. It is unrelated to Google or DeepMind. The
-implementation has been tested to reproduce the official results on a range of
-environments.
-
-[jax]: https://github.com/google/jax#pip-installation-gpu-cuda
-[paper]: https://arxiv.org/pdf/2301.04104
-[website]: https://danijar.com/dreamerv3
-[tweet]: https://twitter.com/danijarh/status/1613161946223677441
