@@ -70,21 +70,15 @@ class MetaWorld(embodied.Env):
     }
 
   def _render(self):
-    try:
-      image = self._env.render()
-      if image is None:
-        raise RuntimeError
-    except Exception:
-      # Fallback: use mujoco offscreen rendering
-      from mujoco import mj_forward, MjrContext, MjrRect, mj_readPixels
-      image = self._env.sim.render(
-          *self._size, camera_name=self._camera)
-      image = image[::-1]  # flip vertical
-    if image.shape[:2] != self._size:
-      from PIL import Image
-      image = Image.fromarray(image)
-      image = image.resize(self._size, Image.BILINEAR)
-      image = np.array(image)
+    import mujoco
+    # Use MuJoCo offscreen rendering directly
+    model = self._env.model
+    data = self._env.data
+    renderer = mujoco.Renderer(model, *self._size)
+    mujoco.mj_forward(model, data)
+    renderer.update_scene(data)
+    image = renderer.render()
+    renderer.close()
     return np.uint8(image)
 
   def close(self):
