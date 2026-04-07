@@ -13,8 +13,8 @@ class MetaWorld(embodied.Env):
     import metaworld
     # MetaWorld task names use '-' (e.g., 'pick-place-v2')
     task_name = task.replace('_', '-')
-    if not task_name.endswith('-v2'):
-      task_name = task_name + '-v2'
+    if not task_name.endswith(('-v2', '-v3')):
+      task_name = task_name + '-v3'
     ml1 = metaworld.ML1(task_name, seed=seed)
     env = ml1.train_classes[task_name]()
     env.set_task(ml1.train_tasks[0])
