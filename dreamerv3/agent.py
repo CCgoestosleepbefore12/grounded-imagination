@@ -162,9 +162,13 @@ class Agent(embodied.jax.Agent):
       B, T = obs['is_first'].shape
       assert all(x.shape[:2] == (B, T) for x in updates.values()), (
           (B, T), {k: v.shape for k, v in updates.items()})
+      # Grounded: TRD-based priority (low trust → high priority)
+      if self.grounded and trd_scores is not None:
+        # trd_scores: (B, T-1), pad to (B, T) with 1.0 for first step
+        padded = jnp.concatenate([
+            jnp.ones((B, 1), dtype=trd_scores.dtype), trd_scores], axis=1)
+        updates['priority'] = 1.0 - padded  # low TRD → high priority
       outs['replay'] = updates
-    # if self.config.replay.fracs.priority > 0:
-    #   outs['replay']['priority'] = losses['model']
     carry = (*carry, {k: data[k][:, -1] for k in self.act_space})
     return carry, outs, metrics
 
