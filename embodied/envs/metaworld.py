@@ -4,13 +4,13 @@ import functools
 
 import elements
 import embodied
-import mujoco
 import numpy as np
 
 
 class MetaWorld(embodied.Env):
 
-  def __init__(self, task, size=(64, 64), camera='corner2', seed=0, **kwargs):
+  def __init__(self, task, size=(64, 64), camera='corner2', seed=0,
+               image=True, **kwargs):
     import metaworld
     task_name = task.replace('_', '-')
     if not task_name.endswith(('-v2', '-v3')):
@@ -21,21 +21,24 @@ class MetaWorld(embodied.Env):
     self._env = env
     self._size = size
     self._camera = camera
+    self._image = image
     self._done = True
     self._info = None
-    self._renderer = None  # lazy init to avoid EGL conflicts with parallel envs
+    self._renderer = None
 
   @functools.cached_property
   def obs_space(self):
     obs = self._env.observation_space
-    return {
-        'image': elements.Space(np.uint8, (*self._size, 3), 0, 255),
+    spaces = {
         'proprio': elements.Space(np.float32, obs.shape, obs.low, obs.high),
         'reward': elements.Space(np.float32),
         'is_first': elements.Space(bool),
         'is_last': elements.Space(bool),
         'is_terminal': elements.Space(bool),
     }
+    if self._image:
+      spaces['image'] = elements.Space(np.uint8, (*self._size, 3), 0, 255)
+    return spaces
 
   @functools.cached_property
   def act_space(self):
@@ -59,17 +62,19 @@ class MetaWorld(embodied.Env):
         is_terminal=terminated)
 
   def _obs(self, obs, reward, is_first=False, is_last=False, is_terminal=False):
-    image = self._render()
-    return {
-        'image': image,
+    result = {
         'proprio': np.float32(obs),
         'reward': np.float32(reward),
         'is_first': is_first,
         'is_last': is_last,
         'is_terminal': is_terminal,
     }
+    if self._image:
+      result['image'] = self._render()
+    return result
 
   def _render(self):
+    import mujoco
     if self._renderer is None:
       self._renderer = mujoco.Renderer(self._env.model, *self._size)
     self._renderer.update_scene(self._env.data)

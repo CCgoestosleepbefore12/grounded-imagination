@@ -34,7 +34,7 @@ defaults:
     dmlab: {size: [64, 64], repeat: 4, episodic: True, use_seed: True}
     minecraft: {size: [64, 64], break_speed: 100.0, logs: False, length: 36000}
     dmc: {size: [64, 64], repeat: 1, proprio: True, image: True, camera: -1}
-    metaworld: {size: [64, 64], camera: corner2}
+    metaworld: {size: [64, 64], camera: corner2, image: True}
     loconav: {size: [64, 64], repeat: 1, camera: -1}
 
   replay:
@@ -197,6 +197,7 @@ dmc_vision:
 metaworld:
   <<: *size50m
   task: metaworld_pick_place
+  env.metaworld.image: False
   run: {steps: 1.1e6, envs: 16, train_ratio: 512}
 
 bsuite:
