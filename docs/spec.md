@@ -899,43 +899,112 @@ GAN/判别器参考 (参考 Spectral Norm + 训练流程, 不直接引入):
     Flax 无内置 Spectral Normalization, 需从 GANs-JAX 参考实现。
 ```
 
-### 8.3 实现优先级
+### 8.3 实现进度 (截至 2026-04-07)
 
 ```
-第 1 周:  MoE dynamics 实现 + 集成到 RSSM
-第 2 周:  TRD 模块 + 自适应 rollout + 加权训练
-第 3 周:  DAgger 纠正逻辑 + 优先级采样
-第 4 周:  在 cup_catch (简单) + pick-place (困难) 上验证全部组件
+已完成:
+  ✅ MoE Dynamics (grounded/moe_dynamics.py) — 同构 Block GRU 专家 + Top-2 Router
+  ✅ TRD (grounded/trd.py) — SpectralNorm + 3层MLP判别器
+  ✅ 自适应 Rollout 加权 — 集成在 agent.py imag_loss, 累积信任乘入 weight
+  ✅ DAgger 工具函数 (grounded/dagger.py) — find_trust_boundary + action_replay_correct
+  ✅ 优先级采样工具 (grounded/prioritized.py) — compute_priorities + IS weights + beta schedule
+  ✅ 诊断工具 (grounded/diagnostics.py) — 论文可视化分析函数
+  ✅ 集成到 agent.py — MoE/TRD/自适应加权已接入 loss() 训练流程
+  ✅ MetaWorld 环境支持 (embodied/envs/metaworld.py) — v3 命名, 图像渲染
+  ✅ 单元测试 44/44 通过
+  ✅ debug smoke test 通过 (CPU)
+  ✅ GPU 训练验证通过 (8×A100)
+
+未完成:
+  ❌ DAgger 集成到训练循环 — 需要修改 embodied/run/train.py 的环境交互阶段
+     (当前实验等价于 Ablation A6: MoE + TRD, 无 DAgger)
+  ❌ 优先级采样集成 — 需要修改 replay buffer 的采样逻辑
+     (当前使用均匀采样, 等价于 Ablation A7)
+  ❌ Replay buffer 存储 qpos/qvel — DAgger 动作回放所需
+
+TRD 负样本说明:
+  当前使用 prior stoch (世界模型预测) 作为负样本, 通过 rssm.loss() 返回的
+  extras['prior_logit'] 传递给 agent.py. 负样本 = softmax(prior_logit) 构建的
+  fake feat, 与真实 posterior feat 对比.
+```
+
+### 8.4 实验计划
+
+```
+第一轮 (正在进行, 2026-04-06 启动):
+  目的: 验证 MoE + TRD 框架 (无 DAgger) 的基本效果
+  配置: 8×A100, dmc_vision, 1.1M steps, train_ratio=512
+  ┌──────┬────────────┬───────────────────────┬────────┐
+  │ GPU  │ 方法       │ 任务                   │ Seed   │
+  ├──────┼────────────┼───────────────────────┼────────┤
+  │ 0    │ Grounded   │ dmc_cup_catch (简单)   │ 0      │
+  │ 1    │ Grounded   │ dmc_manipulator_bring_ball (难) │ 0 │
+  │ 2    │ Grounded   │ dmc_manipulator_bring_ball     │ 1 │
+  │ 3    │ Grounded   │ dmc_manipulator_bring_ball     │ 2 │
+  │ 4    │ Baseline   │ dmc_cup_catch          │ 0      │
+  │ 5    │ Baseline   │ dmc_manipulator_bring_ball     │ 0 │
+  │ 6    │ Baseline   │ dmc_manipulator_bring_ball     │ 1 │
+  │ 7    │ Baseline   │ dmc_manipulator_bring_ball     │ 2 │
+  └──────┴────────────┴───────────────────────┴────────┘
+  早期结果: cup_catch Grounded 991@240K vs Baseline 989@464K (收敛更快)
+           bring_ball 两边都是 0 (预期内, 极难任务)
+
+第二轮 (第一轮完成后):
+  目的: 在操作任务难度梯度上验证 MoE + TRD 效果
+  配置: 8×A100, metaworld config, 1.1M steps, train_ratio=512
+  ┌──────┬────────────┬───────────────────────┬────────┐
+  │ GPU  │ 方法       │ 任务                   │ Seed   │
+  ├──────┼────────────┼───────────────────────┼────────┤
+  │ 0    │ Grounded   │ metaworld_reach (简单) │ 0      │
+  │ 1    │ Grounded   │ metaworld_push (中等)  │ 0      │
+  │ 2    │ Grounded   │ metaworld_door_open (中等) │ 0  │
+  │ 3    │ Grounded   │ metaworld_pick_place (难) │ 0   │
+  │ 4    │ Baseline   │ metaworld_reach        │ 0      │
+  │ 5    │ Baseline   │ metaworld_push         │ 0      │
+  │ 6    │ Baseline   │ metaworld_door_open    │ 0      │
+  │ 7    │ Baseline   │ metaworld_pick_place   │ 0      │
+  └──────┴────────────┴───────────────────────┴────────┘
+
+第三轮 (根据前两轮结果决定):
+  选项 A — 如果 MoE+TRD 有提升:
+    → 集成 DAgger + 优先级采样, 跑完整系统 (A1) vs A6 对比
+    → 在 pick-place 上跑 5 seeds 正式实验
+  选项 B — 如果 MoE+TRD 没有提升:
+    → 诊断: TRD 分数是否分开? MoE router 是否分化?
+    → 调整设计后重新验证
 ```
 
 ---
 
-## 九、时间线
+## 九、时间线 (更新版)
 
 ```
-第 1 个月: 核心实现 + 初步验证
-├── Week 1-2: MoE dynamics + TRD + 自适应想象 + 集成到 DreamerV3
-├── Week 3:   DAgger 纠正 + 在 8 个已有任务上跑完整实验
-└── Week 4:   初步结果分析, 确认方向有效
-               ★ 关键决策点: pick-place 是否有显著提升?
-               如果有 → 继续
-               如果没有 → 诊断哪个组件不 work, 调整设计
+Phase 1: 核心实现 (已完成)
+├── 模块实现: MoE, TRD, DAgger, 优先级采样, 诊断工具
+├── 部分集成: MoE + TRD + 自适应加权 → agent.py
+└── 测试: 44 个单元测试全通过
 
-第 2 个月: 完整实验 + 理论
-├── Week 5-6: 补充 baseline (TD-MPC2, MBPO, SAC)
-│             补充第二梯队任务
-│             Ablation 实验 (A1-A12, 在 pick-place/cup_catch/push 上)
-├── Week 7:   样本效率实验 (限制交互预算)
-│             Scaling 实验
-└── Week 8:   理论分析 (bound 推导和证明)
-               诊断实验 + 全部可视化
+Phase 2: 初步验证 (进行中)
+├── 第一轮: DMC cup_catch + bring_ball, 8×A100 (正在跑)
+├── 第二轮: MetaWorld reach/push/door-open/pick-place (待跑)
+└── ★ 关键决策点: 操作任务上 Grounded 是否优于 Baseline?
 
-第 3 个月: 真机 + 论文
-├── Week 9-10: 真机部署 (选 1-2 个任务)
-├── Week 11:   论文初稿
-└── Week 12:   修改完善
+Phase 3: 完善系统 (根据 Phase 2 结果)
+├── 集成 DAgger 到训练循环 (修改 embodied/run/train.py)
+├── 集成优先级采样 (修改 replay buffer)
+├── 完整系统 (A1) vs 消融实验 (A2-A12)
+└── 多 seed 正式实验 (5 seeds)
 
-第 4 个月 (缓冲): 应对延期 + 最终打磨 + 投稿
+Phase 4: 补充实验 + 理论
+├── 补充 baseline (TD-MPC2, MBPO, SAC, BIRD)
+├── 样本效率实验 + Scaling 实验
+├── 理论分析 (bound 推导)
+└── 诊断可视化 (图 1-5)
+
+Phase 5: 论文
+├── 初稿
+├── 真机部署 (可选)
+└── 修改完善 + 投稿
 ```
 
 ---
