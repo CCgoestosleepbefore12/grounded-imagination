@@ -4,6 +4,7 @@ import functools
 
 import elements
 import embodied
+import mujoco
 import numpy as np
 
 
@@ -11,7 +12,6 @@ class MetaWorld(embodied.Env):
 
   def __init__(self, task, size=(64, 64), camera='corner2', seed=0, **kwargs):
     import metaworld
-    # MetaWorld task names use '-' (e.g., 'pick-place-v2')
     task_name = task.replace('_', '-')
     if not task_name.endswith(('-v2', '-v3')):
       task_name = task_name + '-v3'
@@ -23,10 +23,7 @@ class MetaWorld(embodied.Env):
     self._camera = camera
     self._done = True
     self._info = None
-    self._seed = seed
-    # Create renderer once, reuse every step
-    import mujoco
-    self._renderer = mujoco.Renderer(env.model, *size)
+    self._renderer = None  # lazy init to avoid EGL conflicts with parallel envs
 
   @functools.cached_property
   def obs_space(self):
@@ -73,13 +70,16 @@ class MetaWorld(embodied.Env):
     }
 
   def _render(self):
-    import mujoco
-    mujoco.mj_forward(self._env.model, self._env.data)
+    if self._renderer is None:
+      self._renderer = mujoco.Renderer(self._env.model, *self._size)
     self._renderer.update_scene(self._env.data)
     return np.uint8(self._renderer.render())
 
   def close(self):
     try:
+      if self._renderer is not None:
+        self._renderer.close()
+        self._renderer = None
       self._env.close()
     except Exception:
       pass
