@@ -183,12 +183,63 @@ trust=0.35 (接触区域):
 
 ---
 
-## 第三轮实验：MoE-only 消融（A2 反向）
+## 第三轮实验：MoE-only 消融
 
 ### 目的
 确认性能下降来自 TRD 信任加权还是 MoE 架构本身。
 
 ### 配置
 - MoE only: `--agent.dyn.rssm.moe True --agent.grounded.enabled False`
-- Baseline: 原版 DreamerV3（不变）
-- 任务: pick-place + door-open（下降最严重的两个）
+- Baseline2: 原版 DreamerV3（同代码版本重新跑，公平对比）
+- 任务: reach, push, door-open, pick-place
+
+### 中期结果 (2026-04-08, 服务器关闭前最后数据)
+
+注: MoE-only 步数约 27K, Baseline2 约 74K, Grounded 约 144K, 步数不对齐。
+Baseline (上一轮) 已跑完，步数最多。
+
+| 任务 | MoE-only (27K) | Baseline2 (74K) | Grounded (144K) | Baseline 上轮 (完整) |
+|------|---------------|-----------------|-----------------|---------------------|
+| reach | 1704 | 4828 | 4807 | 4833 |
+| push | 25 | 25 | 4216 | 4748 |
+| door-open | 382 | 3863 | 685 | 4464 |
+| pick-place | 5.6 | 8.5 | 6.2 | 3178 |
+
+### 关键发现
+
+#### 发现 6：MoE 本身也有害
+
+- **现象**：MoE-only 在所有任务上都远低于 Baseline2
+- **步数差异**：MoE-only 步数是 Baseline2 的 1/3（27K vs 74K），但即使考虑进度差异，
+  reach（1704 vs 4828）和 door（382 vs 3863）的差距也无法仅用步数解释
+- **训练速度**：MoE-only fps≈10, Baseline fps≈27, MoE 导致 3x 训练减速
+- **可能原因**：
+  1. 4 个专家分摊数据，每个专家训练不充分
+  2. Router 早期随机分配，导致专家无法有效分化
+  3. Balance loss 可能干扰主训练目标
+  4. Top-2 routing 引入额外噪声
+
+#### 发现 7：三组件全部无效
+
+| 组件 | 预期效果 | 实际效果 | 原因分析 |
+|------|---------|---------|---------|
+| MoE Dynamics | 多专家建模不同动力学 | **有害** | 数据分散+router不稳定+3x减速 |
+| TRD 信任加权 | 降权不可信想象 | **有害** | 度量的是posterior vs prior差异，不是想象质量 |
+| DAgger | 主动纠正不准区域 | 未验证 | 依赖TRD信号，TRD本身有问题 |
+| 优先级采样 | 聚焦不准区域训练 | 未验证 | 触发了Mixture selector __len__ bug |
+
+### 反思
+
+1. **假设未验证就开始实现**：假设"世界模型在接触处预测不准"从未通过诊断实验验证
+2. **方案设计脱离文献**：TRD加权不符合MBRL文献（MOPO证明reward penalty更有效）
+3. **MoE假设过强**：DreamerV3的Block GRU (deter=4096, 8 blocks)容量可能已经足够
+4. **缺少诊断驱动**：应该先诊断瓶颈再设计方案，而非先设计方案再验证
+
+### 后续方向（待定）
+
+当前处于方向重新评估阶段，选项包括：
+1. 对 DreamerV3 在操作任务上做系统诊断，确认真正瓶颈后再针对性改进
+2. 参考 DreamerV4 (Transformer 架构) 或 TD-MPC2 (planning) 换更强底座
+3. 保留 TRD 但改为 reward penalty（类 MOPO），去掉 MoE
+
+需要读论文（DreamerV4, TD-MPC2）后再决定方向。
